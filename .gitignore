@@ -1,0 +1,23 @@
+# Scraped data — re-generate by running the pipeline
+results.jsonl
+enriched.jsonl
+progress.json
+enrich_progress.json
+data.json
+data.js
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Old learning files (Boston plate scraper from the prior project iteration)
+boston.html
+dump.py

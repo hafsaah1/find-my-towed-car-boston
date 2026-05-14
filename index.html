@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boston Towed Cars</title>
+<meta name="description" content="Live list of every car towed in Boston in the last 7 days.">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  :root {
+    --text: #1c1c1e;
+    --muted: #8e8e93;
+    --muted-2: #aeaeb2;
+    --blue: #007aff;
+    --red: #ff3b30;
+    --chip-bg: rgba(118,118,128,0.12);
+    --line: rgba(0,0,0,0.06);
+    --line-strong: rgba(0,0,0,0.1);
+    --glass: rgba(255,255,255,0.82);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, "SF Pro Display", "SF Pro Text",
+                 BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    color: var(--text);
+    overflow: hidden;
+  }
+
+  #map { position: absolute; inset: 0; z-index: 0; }
+  .leaflet-control-attribution { font-size: 10px; }
+
+  /* === Sidebar === */
+  .sidebar {
+    position: absolute; left: 0; top: 0; height: 100%; width: 360px;
+    border-right: 1px solid var(--line-strong);
+    background: var(--glass);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    z-index: 10;
+    display: flex; flex-direction: column;
+  }
+  .sidebar-header {
+    padding: 1rem 1rem 0.5rem;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .dots { display: flex; gap: 0.375rem; }
+  .dot { width: 0.75rem; height: 0.75rem; border-radius: 50%; }
+  .dot-r { background: #ff5f57; } .dot-y { background: #febc2e; } .dot-g { background: #28c840; }
+  .credit { font-size: 10px; letter-spacing: 0.12em; font-weight: 300;
+            color: var(--muted-2); text-decoration: none; }
+  .credit:hover { color: var(--blue); }
+
+  .search-wrap { padding: 0.5rem 1rem 0.25rem; }
+  .search { width: 100%; padding: 0.5rem 0.75rem; border-radius: 10px;
+            background: var(--chip-bg); color: var(--text); border: 0; outline: 0;
+            font-size: 14px; font-family: inherit; }
+
+  .toggle-wrap { padding: 0.5rem 1rem 0.75rem; }
+  .toggle { display: flex; padding: 3px; border-radius: 10px;
+            background: var(--chip-bg); }
+  .toggle button { flex: 1; padding: 0.5rem 0; border: 0; border-radius: 7px;
+                   background: transparent; color: var(--muted); font-weight: 500;
+                   font-size: 14px; cursor: pointer; transition: all 0.15s;
+                   font-family: inherit; }
+  .toggle button.active { background: #ffffff; color: var(--text);
+                          box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+
+  .list { flex: 1; overflow-y: auto; padding: 0 0 0.5rem; }
+  .row { display: flex; gap: 0.75rem; align-items: center;
+         padding: 0.75rem 1rem; cursor: pointer;
+         border-bottom: 1px solid var(--line);
+         transition: background 0.15s; }
+  .row:hover { background: rgba(0,0,0,0.025); }
+  .row.active { background: rgba(0,122,255,0.08); }
+  .row .avatar {
+    width: 44px; height: 44px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-weight: 700; font-size: 13px; letter-spacing: 0.5px;
+    flex-shrink: 0;
+  }
+  .row .body { flex: 1; min-width: 0; }
+  .row .title-line { display: flex; justify-content: space-between;
+                     align-items: center; gap: 0.5rem; }
+  .row .title { font-size: 14px; font-weight: 600; letter-spacing: 0.01em;
+                color: var(--text);
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pill {
+    font-size: 9px; font-weight: 700; letter-spacing: 0.05em;
+    color: var(--muted); background: var(--chip-bg);
+    padding: 3px 7px; border-radius: 999px;
+    text-transform: uppercase; flex-shrink: 0;
+  }
+  .pill.trespassing { color: #b35900; background: rgba(255, 149, 0, 0.14); }
+  .pill.private    { color: #0064d2; background: rgba(0, 122, 255, 0.10); }
+  .row .subtitle { font-size: 12px; color: var(--muted); margin-top: 1px;
+                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .ago { font-size: 11px; color: var(--muted-2); margin-top: 1px; }
+
+  .empty {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 4rem 0 3rem; color: var(--muted);
+    font-size: 14px; gap: 0.5rem;
+  }
+  .empty .icon { font-size: 28px; }
+
+  .footer-bar { padding: 0.625rem 1.25rem; border-top: 1px solid var(--line);
+                display: flex; align-items: center; justify-content: space-between;
+                font-size: 12px; color: var(--muted); }
+  .footer-bar a { color: var(--muted); text-decoration: none; }
+  .footer-bar a:hover { color: var(--blue); }
+  .info-btn { width: 1.5rem; height: 1.5rem; border-radius: 50%; border: 0;
+              background: rgba(0,0,0,0.07); color: var(--muted);
+              font-size: 11px; font-weight: 600; cursor: pointer;
+              display: inline-flex; align-items: center; justify-content: center;
+              font-family: inherit; }
+  .info-btn:hover { opacity: 0.7; }
+
+  /* === Leaderboard view === */
+  .leaderboard { padding: 0.5rem 0; }
+  .lb-section h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+                   color: var(--muted); margin: 0.75rem 1rem 0.25rem; font-weight: 600; }
+  .lb-row { display: flex; justify-content: space-between; align-items: center;
+            padding: 0.4rem 1rem; font-size: 13px; }
+  .lb-row .count { font-family: ui-monospace, "SF Mono", Menlo, monospace;
+                   color: var(--muted); font-size: 12px; }
+
+  /* === Top-right counter card === */
+  .top-card {
+    position: absolute; top: 1rem; right: 1rem;
+    background: white; padding: 0.5rem 1rem; border-radius: 10px;
+    font-size: 13px; color: var(--text);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    z-index: 9;
+  }
+  .top-card .num { font-weight: 600; }
+  .top-toggle {
+    position: absolute; top: 4.25rem; right: 1rem;
+    background: white; padding: 0.4rem; border-radius: 10px;
+    display: flex; gap: 0.25rem;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    z-index: 9;
+  }
+  .top-toggle button {
+    border: 0; background: transparent; color: var(--blue);
+    font-family: inherit; font-size: 13px; font-weight: 500;
+    padding: 0.25rem 0.625rem; border-radius: 7px; cursor: pointer;
+  }
+  .top-toggle button.active { background: var(--blue); color: white; }
+
+  /* === Detail card === */
+  .detail-card {
+    position: absolute; top: 7.5rem; right: 1rem; width: 360px;
+    background: white; border-radius: 14px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+    z-index: 20; padding: 1.25rem;
+    display: none; max-height: calc(100% - 8.5rem); overflow-y: auto;
+  }
+  .detail-card.open { display: block; }
+  .detail-head { display: flex; align-items: flex-start; gap: 0.5rem; }
+  .detail-title { flex: 1; font-size: 18px; font-weight: 700;
+                  letter-spacing: 0.01em; line-height: 1.2; }
+  .detail-close { border: 0; background: transparent; color: var(--muted);
+                  font-size: 18px; cursor: pointer; padding: 0; line-height: 1;
+                  width: 24px; height: 24px; display: flex; align-items: center;
+                  justify-content: center; font-family: inherit; }
+  .detail-plate { color: var(--muted); font-size: 13px; margin-top: 0.25rem;
+                  font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .detail-pill-row { display: flex; gap: 0.4rem; margin-top: 0.75rem;
+                     flex-wrap: wrap; }
+  .field-row { display: flex; padding: 0.625rem 0;
+               border-bottom: 1px solid var(--line); font-size: 13px; }
+  .field-row:last-of-type { border-bottom: 0; }
+  .field-row .k { color: var(--muted); width: 130px; flex-shrink: 0; }
+  .field-row .v { color: var(--text); }
+  .field-list { margin-top: 0.5rem; }
+  .directions-btn {
+    margin-top: 1rem; width: 100%; background: var(--blue); color: white;
+    padding: 0.75rem; border-radius: 10px; border: 0;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    font-family: inherit; text-align: center; text-decoration: none;
+    display: block;
+  }
+  .directions-btn:hover { opacity: 0.9; }
+
+  /* === Map marker === */
+  .marker-pin {
+    width: 36px; height: 36px; border-radius: 50%;
+    color: white; font-weight: 700; font-size: 11px; letter-spacing: 0.5px;
+    display: flex; align-items: center; justify-content: center;
+    border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    position: relative;
+  }
+  .marker-pin.active { transform: scale(1.15);
+                       box-shadow: 0 4px 14px rgba(0,0,0,0.4); }
+
+  /* === Mobile === */
+  @media (max-width: 767px) {
+    .sidebar {
+      left: 0; right: 0; top: auto; bottom: 0;
+      width: auto; height: 65%;
+      border-right: 0; border-top-left-radius: 20px; border-top-right-radius: 20px;
+      box-shadow: 0 -2px 20px rgba(0,0,0,0.1);
+    }
+    .sidebar-header { padding-top: 0.625rem; }
+    .grabber { width: 36px; height: 5px; background: #c7c7cc;
+               border-radius: 999px; margin: 10px auto 0; }
+    .top-card, .top-toggle { right: 0.75rem; }
+    .detail-card { left: 1rem; right: 1rem; width: auto; top: 7.5rem; bottom: auto;
+                   max-height: calc(35% - 8.5rem); }
+  }
+  @media (min-width: 768px) { .grabber { display: none; } }
+
+  /* Info modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 50;
+              display: none; align-items: center; justify-content: center;
+              padding: 1rem; }
+  .modal-bg.open { display: flex; }
+  .modal { background: white; border-radius: 14px; padding: 1.5rem;
+           max-width: 460px; font-size: 14px; line-height: 1.5; }
+  .modal h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+  .modal p { margin: 0.5rem 0; color: #3a3a3c; }
+  .modal a { color: var(--blue); text-decoration: none; }
+  .modal-close { margin-top: 1rem; padding: 0.5rem 1rem; border: 0;
+                 border-radius: 8px; background: var(--blue); color: white;
+                 font-size: 14px; cursor: pointer; font-family: inherit; }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="top-card" id="top-card"><span class="num" id="top-count">0</span> <span id="top-label">cars towed this week</span></div>
+<div class="top-toggle">
+  <button id="tab-today">Today only</button>
+  <button id="tab-week" class="active">7 days</button>
+</div>
+
+<aside class="sidebar">
+  <div class="grabber"></div>
+  <div class="sidebar-header">
+    <div class="dots"><span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span></div>
+    <a class="credit" href="https://www.cityofboston.gov/towing/search/" target="_blank" rel="noopener">A BOSTON EDITION</a>
+  </div>
+  <div class="search-wrap">
+    <input id="filter" class="search" type="search"
+           placeholder="Search by license plate…" autocomplete="off">
+  </div>
+  <div class="toggle-wrap">
+    <div class="toggle">
+      <button id="tab-cars" class="active" type="button">Cars</button>
+      <button id="tab-lb" type="button">Leaderboard</button>
+    </div>
+  </div>
+  <div class="list" id="list">
+    <div class="empty"><div class="icon">🚗</div><div>Loading…</div></div>
+  </div>
+  <div class="footer-bar">
+    <a href="https://www.cityofboston.gov/towing/search/" target="_blank" rel="noopener" id="footer-link">
+      Data from cityofboston.gov
+    </a>
+    <button class="info-btn" id="info-btn" type="button">i</button>
+  </div>
+</aside>
+
+<div class="detail-card" id="detail">
+  <!-- populated dynamically -->
+</div>
+
+<div class="modal-bg" id="modal">
+  <div class="modal">
+    <h2>Boston Towed Cars</h2>
+    <p>Every car the City of Boston has on record as towed in the last 7 days.
+       Data is scraped from
+       <a href="https://www.cityofboston.gov/towing/search/" target="_blank" rel="noopener">the city's lookup tool</a>,
+       which only exposes partial-plate search — so coverage depends on the
+       prefix scan completing.</p>
+    <p><b>About the map pins.</b> The Boston source has no per-car coordinates,
+       so each pin sits near the towing company's yard with deterministic jitter
+       to suggest the neighborhood it services. BTD city-wide tows are scattered
+       across Boston by plate hash. Pin colors are per make — same color = same
+       brand.</p>
+    <p style="color:#8e8e93;font-size:12px">Inspired by
+       <a href="https://www.rodinrooh.com/" target="_blank" rel="noopener">rodinrooh.com</a>
+       and <a href="https://walzr.com/sf-parking/" target="_blank" rel="noopener">Riley Walz's SF parking map</a>.</p>
+    <button class="modal-close" id="modal-close" type="button">Got it</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="geo.js"></script>
+<script src="data.js"></script>
+<script>
+const BOSTON = [42.3601, -71.0589];
+const map = L.map("map", { zoomControl: false, attributionControl: true })
+  .setView(BOSTON, 12);
+L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+  maxZoom: 19,
+}).addTo(map);
+L.control.zoom({ position: "bottomright" }).addTo(map);
+
+const data = window.TOW_DATA || { count: 0, records: [],
+                                  window_start: "", window_end: "",
+                                  generated_at: "" };
+const allRecords = data.records;
+const markers = new Map();
+
+function recId(r) { return r.plate + "|" + r.time; }
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+  }[c]));
+}
+function titleCase(s) {
+  if (!s) return "";
+  return s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+}
+function colorName(c) {
+  const map = {BLK:"Black",WHI:"White",GRY:"Gray",RED:"Red",BLU:"Blue",
+               GRN:"Green",SIL:"Silver",TAN:"Tan",BRO:"Brown",YEL:"Yellow",
+               ORA:"Orange",PUR:"Purple",GOL:"Gold"};
+  return map[c] || c;
+}
+function describe(r, opts = {}) {
+  const parts = [];
+  if (opts.includeYear && r.year) parts.push(r.year);
+  if (r.color) parts.push(colorName(r.color));
+  if (r.make) parts.push(titleCase(r.make));
+  if (r.model) parts.push(r.model);
+  return parts.join(" ").trim() || "Unknown vehicle";
+}
+function fmtTime(iso) {
+  const d = new Date(iso);
+  let h = d.getHours();
+  const m = String(d.getMinutes()).padStart(2, "0");
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return `${h}:${m} ${ampm}`;
+}
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fmtFullDate(iso) {
+  const d = new Date(iso);
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+}
+function relTime(iso) {
+  const d = new Date(iso);
+  const sec = Math.max(0, (Date.now() - d.getTime()) / 1000);
+  if (sec < 60) return "just now";
+  if (sec < 3600) return Math.floor(sec/60) + " min ago";
+  if (sec < 86400) return Math.floor(sec/3600) + (Math.floor(sec/3600)===1?" hour ago":" hours ago");
+  const days = Math.floor(sec / 86400);
+  return days === 1 ? "1 day ago" : days + " days ago";
+}
+
+// ===== Filter state =====
+let timeFilter = "week"; // "today" | "week"
+let activeTab  = "cars"; // "cars" | "lb"
+let activeId   = null;
+
+function currentRecords() {
+  let recs = allRecords;
+  if (timeFilter === "today") {
+    const today = new Date(); today.setHours(0,0,0,0);
+    recs = recs.filter(r => new Date(r.time) >= today);
+  }
+  const q = document.getElementById("filter").value.trim().toLowerCase();
+  if (q) {
+    recs = recs.filter(r =>
+      (r.plate+" "+r.state+" "+r.make+" "+r.model+" "+r.reason+" "+r.by+" "+r.agency)
+        .toLowerCase().includes(q));
+  }
+  return recs;
+}
+
+// ===== Sidebar render =====
+function renderCars() {
+  const recs = currentRecords();
+  const list = document.getElementById("list");
+  if (recs.length === 0) {
+    list.innerHTML = `<div class="empty"><div class="icon">🚗</div>
+      <div>${timeFilter==="today" ? "No tows yet today" : "No tows in window"}</div></div>`;
+    syncMarkers(recs); updateTopCount(recs); return;
+  }
+  list.innerHTML = recs.map(r => {
+    const id = recId(r);
+    const init = window.makeInitials(r.make);
+    const color = window.colorForMake(r.make);
+    const area = window.pinFor(r)[2];
+    const pillCls = r.agency === "PRIVATE" ? "private"
+                  : r.reason && r.reason.toLowerCase().includes("trespass") ? "trespassing"
+                  : "";
+    const pillText = r.reason || r.agency || "";
+    return `<div class="row${id===activeId?" active":""}" data-id="${escapeHtml(id)}">
+      <div class="avatar" style="background:${color}">${escapeHtml(init)}</div>
+      <div class="body">
+        <div class="title-line">
+          <div class="title">${escapeHtml(describe(r).toUpperCase())}</div>
+          ${pillText ? `<div class="pill ${pillCls}">${escapeHtml(pillText)}</div>` : ""}
+        </div>
+        <div class="subtitle">${escapeHtml(area)} · ${escapeHtml(r.by||"—")}</div>
+        <div class="ago">${escapeHtml(relTime(r.time))}</div>
+      </div>
+    </div>`;
+  }).join("");
+  list.querySelectorAll(".row").forEach(row => {
+    row.addEventListener("click", () => selectRecord(row.dataset.id, true));
+  });
+  syncMarkers(recs);
+  updateTopCount(recs);
+}
+
+function renderLeaderboard() {
+  const recs = currentRecords();
+  const list = document.getElementById("list");
+  if (recs.length === 0) {
+    list.innerHTML = `<div class="empty"><div class="icon">🏆</div>
+      <div>Nothing to rank yet</div></div>`;
+    return;
+  }
+  const top = (getter, n) => {
+    const c = {};
+    for (const r of recs) {
+      const k = getter(r); if (!k) continue;
+      c[k] = (c[k]||0) + 1;
+    }
+    return Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,n);
+  };
+  const section = (title, rows) => `
+    <div class="lb-section">
+      <h3>${title}</h3>
+      ${rows.map(([k,v]) =>
+        `<div class="lb-row"><span>${escapeHtml(k)}</span>
+         <span class="count">${v}</span></div>`).join("")}
+    </div>`;
+  list.innerHTML = `<div class="leaderboard">
+    ${section("Top reasons", top(r=>r.reason, 5))}
+    ${section("Top makes",   top(r=>titleCase(r.make), 5))}
+    ${section("Top colors",  top(r=>colorName(r.color), 5))}
+    ${section("Top tow companies", top(r=>r.by, 5))}
+  </div>`;
+}
+
+function rerender() { (activeTab === "cars" ? renderCars : renderLeaderboard)(); }
+
+function updateTopCount(recs) {
+  document.getElementById("top-count").textContent = recs.length;
+  document.getElementById("top-label").textContent =
+    timeFilter === "today"
+      ? (recs.length === 1 ? "car towed today" : "cars towed today")
+      : (recs.length === 1 ? "car towed this week" : "cars towed this week");
+}
+
+// ===== Map markers =====
+function makeIcon(rec, active) {
+  const init = window.makeInitials(rec.make);
+  const color = window.colorForMake(rec.make);
+  return L.divIcon({
+    className: "",
+    html: `<div class="marker-pin${active?" active":""}"
+                style="background:${color}">${escapeHtml(init)}</div>`,
+    iconSize: [36, 36], iconAnchor: [18, 18],
+  });
+}
+
+function syncMarkers(visible) {
+  const visibleIds = new Set(visible.map(recId));
+  // Remove markers no longer visible
+  for (const [id, m] of markers) {
+    if (!visibleIds.has(id)) { map.removeLayer(m); markers.delete(id); }
+  }
+  // Add new ones
+  for (const r of visible) {
+    const id = recId(r);
+    if (markers.has(id)) continue;
+    const [lat, lon] = window.pinFor(r);
+    const m = L.marker([lat, lon], { icon: makeIcon(r, id === activeId) })
+      .addTo(map);
+    m.on("click", () => selectRecord(id, false));
+    markers.set(id, m);
+  }
+}
+
+// ===== Selection =====
+function selectRecord(id, flyMap) {
+  const r = allRecords.find(x => recId(x) === id);
+  if (!r) return;
+  activeId = id;
+  // Refresh row highlight
+  document.querySelectorAll(".row").forEach(row =>
+    row.classList.toggle("active", row.dataset.id === id));
+  // Refresh marker visuals
+  for (const [mid, m] of markers) {
+    m.setIcon(makeIcon(allRecords.find(x=>recId(x)===mid), mid === id));
+  }
+  // Fly map and scroll row
+  if (flyMap) {
+    const m = markers.get(id);
+    if (m) map.flyTo(m.getLatLng(), 15, { duration: 0.5 });
+  } else {
+    const row = document.querySelector(`.row[data-id="${CSS.escape(id)}"]`);
+    if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const m = markers.get(id);
+    if (m) map.flyTo(m.getLatLng(), Math.max(14, map.getZoom()), { duration: 0.4 });
+  }
+  showDetail(r);
+}
+
+function closeDetail() {
+  document.getElementById("detail").classList.remove("open");
+  activeId = null;
+  document.querySelectorAll(".row.active").forEach(r => r.classList.remove("active"));
+  for (const [mid, m] of markers) {
+    const rec = allRecords.find(x => recId(x) === mid);
+    if (rec) m.setIcon(makeIcon(rec, false));
+  }
+}
+
+// ===== Detail card =====
+function showDetail(r) {
+  const impound = window.impoundFor(r);
+  const area = window.pinFor(r)[2];
+  const title = describe(r, { includeYear: true });
+  const directionsUrl = "https://www.google.com/maps/dir/?api=1&destination=" +
+    encodeURIComponent(impound.address);
+  const pill = r.reason || r.agency || "Towed";
+  const pillCls = r.agency === "PRIVATE" ? "private"
+                : r.reason && r.reason.toLowerCase().includes("trespass") ? "trespassing"
+                : "";
+  document.getElementById("detail").innerHTML = `
+    <div class="detail-head">
+      <div class="detail-title">${escapeHtml(title)}</div>
+      <button class="detail-close" id="detail-close" aria-label="Close">×</button>
+    </div>
+    <div class="detail-plate">${escapeHtml(r.plate)} · ${escapeHtml(r.state || "")}</div>
+    <div class="detail-pill-row">
+      <span class="pill ${pillCls}">${escapeHtml(pill)}</span>
+      ${r.agency ? `<span class="pill">${escapeHtml(r.agency)}</span>` : ""}
+    </div>
+    <div class="field-list">
+      <div class="field-row"><div class="k">Towed from</div>
+        <div class="v">${escapeHtml(area)} (approx.)</div></div>
+      <div class="field-row"><div class="k">Towed by</div>
+        <div class="v">${escapeHtml(r.by || "—")}</div></div>
+      <div class="field-row"><div class="k">Reason</div>
+        <div class="v">${escapeHtml(r.reason || "—")}</div></div>
+      <div class="field-row"><div class="k">Date &amp; time</div>
+        <div class="v">${escapeHtml(fmtFullDate(r.time))}, ${escapeHtml(fmtTime(r.time))}</div></div>
+      <div class="field-row"><div class="k">Tow company</div>
+        <div class="v">${escapeHtml(impound.fullName)}</div></div>
+      <div class="field-row"><div class="k">Impound address</div>
+        <div class="v">${escapeHtml(impound.address)}</div></div>
+    </div>
+    <a class="directions-btn" href="${directionsUrl}" target="_blank" rel="noopener">
+      Get directions to impound
+    </a>
+  `;
+  document.getElementById("detail").classList.add("open");
+  document.getElementById("detail-close").addEventListener("click", closeDetail);
+}
+
+// ===== Wire UI =====
+document.getElementById("filter").addEventListener("input", () => {
+  if (activeTab !== "cars") { activeTab = "cars"; setTabActive(); }
+  rerender();
+});
+function setTabActive() {
+  document.getElementById("tab-cars").classList.toggle("active", activeTab === "cars");
+  document.getElementById("tab-lb").classList.toggle("active", activeTab === "lb");
+}
+document.getElementById("tab-cars").addEventListener("click", () => {
+  activeTab = "cars"; setTabActive(); rerender();
+});
+document.getElementById("tab-lb").addEventListener("click", () => {
+  activeTab = "lb"; setTabActive(); rerender();
+});
+function setTimeTab() {
+  document.getElementById("tab-today").classList.toggle("active", timeFilter === "today");
+  document.getElementById("tab-week").classList.toggle("active", timeFilter === "week");
+}
+document.getElementById("tab-today").addEventListener("click", () => {
+  timeFilter = "today"; setTimeTab(); rerender();
+});
+document.getElementById("tab-week").addEventListener("click", () => {
+  timeFilter = "week"; setTimeTab(); rerender();
+});
+
+const modal = document.getElementById("modal");
+document.getElementById("info-btn").addEventListener("click", () => modal.classList.add("open"));
+document.getElementById("modal-close").addEventListener("click", () => modal.classList.remove("open"));
+modal.addEventListener("click", e => { if (e.target === modal) modal.classList.remove("open"); });
+
+document.getElementById("footer-link").textContent =
+  data.count + " tow" + (data.count === 1 ? "" : "s") + " · last 7 days";
+
+rerender();
+</script>
+</body>
+</html>
