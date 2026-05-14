@@ -69,8 +69,7 @@ recent plate to grab full timestamps, reasons, and towing-company info.
 
 ## Credits
 
-Inspired by [rodinrooh.com](https://www.rodinrooh.com) and
-[Riley Walz's SF parking map](https://walzr.com/sf-parking/).
+Inspired by [Riley Walz's SF parking map](https://walzr.com/sf-parking/).
 
 ## License
 
