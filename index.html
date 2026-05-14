@@ -293,7 +293,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script src="geo.js"></script>
-<script src="data.js"></script>
+<script src="config.js"></script>
 <script>
 const BOSTON = [42.3601, -71.0589];
 const map = L.map("map", { zoomControl: false, attributionControl: true })
@@ -304,13 +304,43 @@ L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
 }).addTo(map);
 L.control.zoom({ position: "bottomright" }).addTo(map);
 
-const data = window.TOW_DATA || { count: 0, records: [],
-                                  window_start: "", window_end: "",
-                                  generated_at: "" };
-const allRecords = data.records;
+let allRecords = [];
+let metaCount = 0;
 const markers = new Map();
 
 function recId(r) { return r.plate + "|" + r.time; }
+
+// Map Supabase row (snake_case columns) -> the field names the UI expects.
+function fromSupabase(r) {
+  return {
+    state: r.state, plate: r.plate, time: r.time,
+    year: r.year, make: r.make, model: r.model,
+    color: r.color, desc: r.vehicle_desc,
+    by: r.tow_company, agency: r.agency, reason: r.reason,
+    modified: r.modified,
+  };
+}
+
+async function loadFromSupabase() {
+  // Last 7 days inclusive, in Boston time. Cutoff is start-of-day 6 days ago.
+  const cutoff = new Date();
+  cutoff.setHours(0, 0, 0, 0);
+  cutoff.setDate(cutoff.getDate() - 6);
+  const cutoffIso = cutoff.toISOString();
+  const url = window.SUPABASE_URL + "/rest/v1/tows" +
+    "?select=*&time=gte." + encodeURIComponent(cutoffIso) +
+    "&order=time.desc&limit=5000";
+  const r = await fetch(url, {
+    headers: {
+      apikey: window.SUPABASE_ANON_KEY,
+      Authorization: "Bearer " + window.SUPABASE_ANON_KEY,
+    },
+  });
+  if (!r.ok) throw new Error("Supabase " + r.status);
+  const rows = await r.json();
+  allRecords = rows.map(fromSupabase);
+  metaCount = allRecords.length;
+}
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
@@ -594,10 +624,19 @@ document.getElementById("info-btn").addEventListener("click", () => modal.classL
 document.getElementById("modal-close").addEventListener("click", () => modal.classList.remove("open"));
 modal.addEventListener("click", e => { if (e.target === modal) modal.classList.remove("open"); });
 
-document.getElementById("footer-link").textContent =
-  data.count + " tow" + (data.count === 1 ? "" : "s") + " · last 7 days";
-
-rerender();
+async function bootstrap() {
+  try {
+    await loadFromSupabase();
+    document.getElementById("footer-link").textContent =
+      metaCount + " tow" + (metaCount === 1 ? "" : "s") + " · last 7 days";
+    rerender();
+  } catch (e) {
+    document.getElementById("list").innerHTML =
+      `<div class="empty"><div class="icon">⚠️</div>
+       <div>Couldn't load data: ${escapeHtml(e.message)}</div></div>`;
+  }
+}
+bootstrap();
 </script>
 </body>
 </html>

@@ -1,143 +1,165 @@
-"""Enrich recent partial-match results with full detail-page data.
+"""Enrich recently-seen plates with full tow-event data, writing to Supabase.
 
-The partial-match table only gives plate/make-model/date. The exact-plate
-detail page returns one record per tow event with State, Plate, Year, Make,
-Model, Color, Desc, By (tow company), Agency, Reason, Time (full timestamp),
-and Modified.
+Reads plates with `last_seen_date` in the last 7 days from the `plates` table,
+fetches each plate's detail page from cityofboston.gov, parses every tow
+event listed there, and upserts into the `tows` table.
 
-Strategy: collect every unique plate from results.jsonl whose listed date
-falls within the last 7 days, fetch each plate's detail page once, parse
-every tow record on the page, and append to enriched.jsonl.
+Uses N worker threads (default 4) — each self-paced at REQUEST_DELAY sec.
 
-Resumable via enrich_progress.json.
+Credentials via environment (works for both .env locally and CI secrets):
+  SUPABASE_URL, SUPABASE_SERVICE_KEY
 """
 
-import json
+import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 from bs4 import BeautifulSoup
+from supabase import create_client
 
 BASE_URL = "https://www.cityofboston.gov/towing/search/"
 HEADERS = {"User-Agent": "find-my-towed-car-boston (github.com/hafsaah1)"}
 REQUEST_DELAY = 1.0
 TIMEOUT = 15
 WINDOW_DAYS = 7
-
-ROOT = Path(__file__).parent
-RESULTS_PATH = ROOT / "results.jsonl"
-ENRICHED_PATH = ROOT / "enriched.jsonl"
-PROGRESS_PATH = ROOT / "enrich_progress.json"
+WORKERS = int(os.environ.get("ENRICH_WORKERS", "4"))
+TIME_BUDGET_SEC = int(os.environ.get("ENRICH_BUDGET_SEC", "300"))
+BOSTON_TZ = ZoneInfo("America/New_York")
 
 DETAIL_KEYS = {"State", "Plate", "Year", "Make", "Model", "Desc",
                "Color", "By", "Agency", "Reason", "Time", "Modified"}
 
+ROOT = Path(__file__).parent
+env_path = ROOT / ".env"
+if env_path.exists():
+    for line in env_path.read_text().splitlines():
+        if "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
 
-def parse_partial_date(s):
+acc = {}                  # key -> row dict, deduped accumulator
+acc_lock = threading.Lock()
+stats = {"done": 0, "errors": 0, "started": 0}
+stats_lock = threading.Lock()
+
+
+def parse_detail_time(s):
     try:
-        return datetime.strptime(s, "%m/%d/%Y").date()
+        return datetime.strptime(s, "%m/%d/%Y %I:%M:%S %p").replace(tzinfo=BOSTON_TZ)
     except (ValueError, TypeError):
         return None
 
 
-def collect_recent_plates():
-    """Plates with any partial-match row dated within the last 7 days."""
-    today = date.today()
-    cutoff = today - timedelta(days=WINDOW_DAYS - 1)
-    plates = {}  # (state, plate) -> latest_date seen
-    for line in RESULTS_PATH.open():
-        row = json.loads(line)
-        d = parse_partial_date(row["date"])
-        if d is None or d < cutoff or d > today:
-            continue
-        key = (row["state"], row["plate"])
-        if key not in plates or d > plates[key]:
-            plates[key] = d
-    return plates
-
-
 def parse_detail_tables(html):
-    """Yield dicts, one per tow event found in the detail page."""
     soup = BeautifulSoup(html, "html.parser")
     for table in soup.select("table"):
-        record = {}
+        rec = {}
         for row in table.select("tr"):
-            th = row.select_one("th")
-            td = row.select_one("td")
+            th = row.select_one("th"); td = row.select_one("td")
             if not (th and td):
                 continue
             key = th.get_text(strip=True)
             if key in DETAIL_KEYS:
-                record[key] = td.get_text(" ", strip=True)
-        # A real tow record has at least these three fields.
-        if {"State", "Plate", "Time"}.issubset(record):
-            yield record
+                rec[key] = td.get_text(" ", strip=True)
+        if {"State", "Plate", "Time"}.issubset(rec):
+            yield rec
 
 
-def load_progress():
-    if PROGRESS_PATH.exists():
-        return json.loads(PROGRESS_PATH.read_text())
-    return {"done": []}
+def to_row(rec):
+    t = parse_detail_time(rec.get("Time", ""))
+    if t is None or not rec.get("Plate"):
+        return None
+    m = parse_detail_time(rec.get("Modified", ""))
+    return {
+        "state":        rec.get("State", "") or "",
+        "plate":        rec.get("Plate", ""),
+        "time":         t.isoformat(),
+        "year":         rec.get("Year", "") or "",
+        "make":         rec.get("Make", "") or "",
+        "model":        rec.get("Model", "") or "",
+        "color":        rec.get("Color", "") or "",
+        "vehicle_desc": rec.get("Desc", "") or "",
+        "tow_company":  rec.get("By", "") or "",
+        "agency":       rec.get("Agency", "") or "",
+        "reason":       rec.get("Reason", "") or "",
+        "modified":     m.isoformat() if m else None,
+    }
 
 
-def save_progress(progress):
-    PROGRESS_PATH.write_text(json.dumps(progress))
+def fetch_one(session, plate, deadline):
+    if time.time() > deadline:
+        return
+    try:
+        r = session.get(BASE_URL, params={"plate": plate},
+                        headers=HEADERS, timeout=TIMEOUT)
+    except requests.RequestException as e:
+        with stats_lock: stats["errors"] += 1
+        time.sleep(REQUEST_DELAY * 2)
+        return
+    if r.status_code != 200:
+        with stats_lock: stats["errors"] += 1
+        time.sleep(REQUEST_DELAY * 2)
+        return
+    rows = [to_row(rec) for rec in parse_detail_tables(r.text)]
+    rows = [row for row in rows if row]
+    with acc_lock:
+        for row in rows:
+            acc[(row["state"], row["plate"], row["time"])] = row
+    with stats_lock:
+        stats["done"] += 1
+    time.sleep(REQUEST_DELAY)
 
 
 def main():
-    plates = collect_recent_plates()
-    print(f"Found {len(plates)} unique recent plates to enrich")
+    url = os.environ["SUPABASE_URL"]
+    key = os.environ["SUPABASE_SERVICE_KEY"]
+    client = create_client(url, key)
 
-    progress = load_progress()
-    done = {tuple(x) for x in progress["done"]}
-    pending = [p for p in plates if p not in done]
-    print(f"Already enriched: {len(done)}, pending: {len(pending)}")
+    cutoff = (date.today() - timedelta(days=WINDOW_DAYS - 1)).isoformat()
+    plates = []
+    offset = 0
+    while True:
+        r = (client.table("plates")
+             .select("state,plate")
+             .gte("last_seen_date", cutoff)
+             .order("last_seen_date", desc=True)
+             .range(offset, offset + 999)
+             .execute())
+        plates.extend(r.data)
+        if len(r.data) < 1000: break
+        offset += 1000
+    print(f"Enriching {len(plates)} recent plates with {WORKERS} workers, "
+          f"{TIME_BUDGET_SEC}s budget", flush=True)
 
-    session = requests.Session()
-    out = ENRICHED_PATH.open("a", encoding="utf-8")
-    errors = 0
-    started = time.time()
+    stats["started"] = time.time()
+    deadline = stats["started"] + TIME_BUDGET_SEC
 
-    try:
-        for i, (state, plate) in enumerate(pending, 1):
-            try:
-                r = session.get(BASE_URL, params={"plate": plate},
-                                headers=HEADERS, timeout=TIMEOUT)
-            except requests.RequestException as e:
-                errors += 1
-                print(f"[{plate}] network error: {e}", flush=True)
-                time.sleep(REQUEST_DELAY * 3)
-                continue
-            if r.status_code != 200:
-                errors += 1
-                print(f"[{plate}] HTTP {r.status_code}", flush=True)
-                time.sleep(REQUEST_DELAY * 3)
-                continue
+    def worker_task(plate):
+        # one session per submission — cheap, threadsafe
+        s = requests.Session()
+        fetch_one(s, plate, deadline)
 
-            records = list(parse_detail_tables(r.text))
-            for rec in records:
-                out.write(json.dumps(rec) + "\n")
-            done.add((state, plate))
-            if i % 10 == 0 or records:
-                elapsed = time.time() - started
-                rate = i / elapsed if elapsed else 0
-                eta = (len(pending) - i) / rate if rate else 0
-                print(f"[{i}/{len(pending)}] {plate} -> {len(records)} events "
-                      f"(rate {rate:.2f} q/s, eta {eta/60:.1f} min, errors {errors})",
-                      flush=True)
-            if i % 25 == 0:
-                out.flush()
-                progress["done"] = [list(k) for k in sorted(done)]
-                save_progress(progress)
-            time.sleep(REQUEST_DELAY)
-    finally:
-        out.close()
-        progress["done"] = [list(k) for k in sorted(done)]
-        save_progress(progress)
-        print(f"Stopped. {len(done)} plates enriched total, {errors} errors this run.",
-              flush=True)
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        futures = [pool.submit(worker_task, p["plate"]) for p in plates]
+        for f in futures:
+            try: f.result()
+            except Exception as e:
+                print(f"worker error: {e}", flush=True)
+
+    # Final upsert
+    rows = list(acc.values())
+    print(f"Upserting {len(rows)} unique tow events…", flush=True)
+    BATCH = 500
+    for i in range(0, len(rows), BATCH):
+        client.table("tows").upsert(rows[i:i+BATCH],
+            on_conflict="state,plate,time").execute()
+    print(f"Done. {stats['done']} plates fetched, {stats['errors']} errors, "
+          f"{len(rows)} tow events written.", flush=True)
 
 
 if __name__ == "__main__":
