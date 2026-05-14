@@ -1,0 +1,17 @@
+# Vercel only needs the static files. Keep Python out so it doesn't
+# try to deploy as a serverless function — the Python lives in CI.
+*.py
+*.pyc
+__pycache__/
+requirements.txt
+.env
+.env.example
+.github/
+*.jsonl
+*.log
+refresh-loop.sh
+supabase_schema.sql
+migrate_to_supabase.py
+boston.html
+scraper.py
+data.json
