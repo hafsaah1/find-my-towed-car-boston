@@ -1,0 +1,40 @@
+name: Nightly full re-scrape
+
+on:
+  schedule:
+    # 07:00 UTC = 03:00 EDT — quietest hour for the city's servers.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    # scrape is ~60-100 min at 6 workers, migrate is ~25 min. 4 hrs cap for headroom.
+    timeout-minutes: 240
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Discover plates
+        env:
+          SCRAPE_WORKERS: "6"
+        run: python scrape.py
+
+      - name: Upload new plates to Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python -c "import migrate_to_supabase as m; m.migrate_plates()"

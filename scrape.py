@@ -17,22 +17,22 @@ Output row schema:
 
 import itertools
 import json
+import os
 import string
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from queue import Queue
 
 import requests
 from bs4 import BeautifulSoup
 
 BASE_URL = "https://www.cityofboston.gov/towing/search/"
 HEADERS = {"User-Agent": "find-my-towed-car-boston (github.com/hafsaah1)"}
-REQUEST_DELAY = 1.0  # per-worker delay
+REQUEST_DELAY = float(os.environ.get("SCRAPE_DELAY", "1.0"))  # per-worker delay
 TIMEOUT = 15
-WORKERS = 4
+WORKERS = int(os.environ.get("SCRAPE_WORKERS", "4"))
 
 ROOT = Path(__file__).parent
 RESULTS_PATH = ROOT / "results.jsonl"
