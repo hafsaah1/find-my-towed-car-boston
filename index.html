@@ -327,18 +327,29 @@ async function loadFromSupabase() {
   cutoff.setHours(0, 0, 0, 0);
   cutoff.setDate(cutoff.getDate() - 6);
   const cutoffIso = cutoff.toISOString();
-  const url = window.SUPABASE_URL + "/rest/v1/tows" +
-    "?select=*&time=gte." + encodeURIComponent(cutoffIso) +
-    "&order=time.desc&limit=5000";
-  const r = await fetch(url, {
-    headers: {
-      apikey: window.SUPABASE_ANON_KEY,
-      Authorization: "Bearer " + window.SUPABASE_ANON_KEY,
-    },
-  });
-  if (!r.ok) throw new Error("Supabase " + r.status);
-  const rows = await r.json();
-  allRecords = rows.map(fromSupabase);
+
+  // Supabase REST caps at 1000 rows per request — paginate to get them all.
+  const PAGE = 1000;
+  const all = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const url = window.SUPABASE_URL + "/rest/v1/tows" +
+      "?select=*&time=gte." + encodeURIComponent(cutoffIso) +
+      "&order=time.desc";
+    const r = await fetch(url, {
+      headers: {
+        apikey: window.SUPABASE_ANON_KEY,
+        Authorization: "Bearer " + window.SUPABASE_ANON_KEY,
+        Range: `${offset}-${offset + PAGE - 1}`,
+        "Range-Unit": "items",
+      },
+    });
+    if (!r.ok && r.status !== 206) throw new Error("Supabase " + r.status);
+    const rows = await r.json();
+    all.push(...rows);
+    if (rows.length < PAGE) break;
+    if (offset > 20000) break; // safety stop
+  }
+  allRecords = all.map(fromSupabase);
   metaCount = allRecords.length;
 }
 function escapeHtml(s) {
