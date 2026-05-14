@@ -24,7 +24,7 @@ jobs:
           cache: pip
 
       - name: Install deps
-        run: pip install requests beautifulsoup4 supabase
+        run: pip install -r requirements.txt
 
       - name: Run enrich.py
         env:
