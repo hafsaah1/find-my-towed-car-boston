@@ -2,8 +2,9 @@ name: Refresh tows from Boston
 
 on:
   schedule:
-    # Every 30 minutes. GitHub may delay scheduled runs under load.
-    - cron: "*/30 * * * *"
+    # Every 6 minutes. GitHub Actions minimum is 5 min, and runs may be
+    # delayed under load — in practice this usually fires every 6–15 min.
+    - cron: "*/6 * * * *"
   workflow_dispatch:
 
 concurrency:
