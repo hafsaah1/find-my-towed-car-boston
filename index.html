@@ -444,7 +444,7 @@ function renderCars() {
           ${pillText ? `<div class="pill ${pillCls}">${escapeHtml(pillText)}</div>` : ""}
         </div>
         <div class="subtitle">${escapeHtml(area)} · ${escapeHtml(r.by||"—")}</div>
-        <div class="ago">${escapeHtml(relTime(r.time))}</div>
+        <div class="ago" data-time="${escapeHtml(r.time)}">${escapeHtml(relTime(r.time))}</div>
       </div>
     </div>`;
   }).join("");
@@ -648,6 +648,14 @@ async function bootstrap() {
   }
 }
 bootstrap();
+
+// Tick the "X min ago" labels every 30 sec so they stay current
+// without re-fetching anything.
+setInterval(() => {
+  document.querySelectorAll(".ago[data-time]").forEach(el => {
+    el.textContent = relTime(el.dataset.time);
+  });
+}, 30000);
 </script>
 </body>
 </html>
