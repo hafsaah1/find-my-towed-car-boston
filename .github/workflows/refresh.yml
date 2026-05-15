@@ -1,10 +1,9 @@
 name: Refresh tows from Boston
 
 on:
-  schedule:
-    # Every 6 minutes. GitHub Actions minimum is 5 min, and runs may be
-    # delayed under load — in practice this usually fires every 6–15 min.
-    - cron: "*/6 * * * *"
+  # Triggered externally by cron-job.org every 5 min via workflow_dispatch.
+  # GitHub's own schedule cron was throttled under load (1h+ delays), so
+  # the external trigger is the source of truth for cadence.
   workflow_dispatch:
 
 concurrency:
