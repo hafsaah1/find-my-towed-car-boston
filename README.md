@@ -1,7 +1,7 @@
 # find-my-towed-car-boston
 
-A live map of every car towed in Boston in the last 7 days, styled after
-[rodinrooh.com](https://www.rodinrooh.com) (SF) but for Boston data.
+A live map of every car towed in Boston in the last 7 days
+
 
 ## How it works
 
