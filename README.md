@@ -7,7 +7,7 @@ A live map of every car towed in Boston in the last 7 days
 
 The City of Boston exposes a tow lookup at
 [cityofboston.gov/towing/search/](https://www.cityofboston.gov/towing/search/),
-but only lets you search **one plate at a time** — no public list endpoint.
+but only lets you search **one plate at a time** :: no public list endpoint.
 
 
 
